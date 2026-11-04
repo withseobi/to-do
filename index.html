@@ -10,6 +10,7 @@
     body { margin: 0; min-height: 100vh; padding: 64px 20px; }
     main { width: min(100%, 620px); margin: 0 auto; }
     h1 { margin: 0 0 8px; font-size: clamp(30px, 5vw, 40px); letter-spacing: -.05em; }
+    .today { display: block; margin: 0 0 8px; color: #4f5ed5; font-weight: 700; }
     .intro { margin: 0 0 28px; color: #667085; }
     .card { background: white; border: 1px solid #e5eaf2; border-radius: 20px; padding: 24px; box-shadow: 0 12px 32px #25345a0d; }
     form { display: flex; gap: 10px; }
@@ -37,6 +38,7 @@
 <body>
   <main>
     <h1>할 일 목록</h1>
+    <time id="today" class="today"></time>
     <p class="intro">오늘 할 일을 적고 하나씩 완료해 보세요.</p>
     <section class="card" aria-label="할 일 추가">
       <form id="task-form">
@@ -55,7 +57,18 @@
     const list = document.querySelector('#task-list');
     const empty = document.querySelector('#empty');
     const count = document.querySelector('#count');
+    const today = document.querySelector('#today');
     let tasks = [];
+
+    function updateToday() {
+      const now = new Date();
+      today.dateTime = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      today.textContent = new Intl.DateTimeFormat('ko-KR', {
+        year: 'numeric', month: 'long', day: 'numeric', weekday: 'long'
+      }).format(now);
+    }
+    updateToday();
+    setInterval(updateToday, 60_000);
 
     try {
       const saved = JSON.parse(localStorage.getItem(storageKey) || '[]');
