@@ -10,6 +10,11 @@
     body { margin: 0; min-height: 100vh; padding: 64px 20px; }
     main { width: min(100%, 620px); margin: 0 auto; }
     h1 { margin: 0 0 8px; font-size: clamp(30px, 5vw, 40px); letter-spacing: -.05em; }
+    .topbar { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+    .account { display: flex; align-items: center; gap: 10px; max-width: 55%; }
+    .account-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; color: #475467; }
+    .account-button { border: 1px solid #cdd5e3; border-radius: 9px; padding: 9px 13px; background: white; color: #20283a; white-space: nowrap; }
+    .account-button:hover { background: #f2f4fa; }
     .today { display: block; margin: 0 0 8px; color: #c62828; font-size: clamp(22px, 4vw, 28px); font-weight: 700; }
     .intro { margin: 0 0 28px; color: #667085; }
     .card { background: white; border: 1px solid #e5eaf2; border-radius: 20px; padding: 24px; box-shadow: 0 12px 32px #25345a0d; }
@@ -32,12 +37,29 @@
     .delete:hover { background: #ffe1e4; }
     button:focus-visible, li input:focus-visible { outline: 3px solid #5665db80; outline-offset: 2px; }
     .empty { padding: 35px 12px; border: 1px dashed #cdd5e3; border-radius: 11px; color: #667085; text-align: center; }
+    dialog { width: min(100% - 32px, 390px); border: 0; border-radius: 18px; padding: 28px; box-shadow: 0 24px 70px #14213d40; }
+    dialog::backdrop { background: #17213a80; }
+    .dialog-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 20px; }
+    .dialog-head h2 { font-size: 23px; }
+    .close { border: 0; background: transparent; color: #667085; font-size: 28px; line-height: 1; }
+    .auth-form { display: grid; gap: 12px; }
+    .auth-form label { display: grid; gap: 6px; font-size: 14px; font-weight: 600; }
+    .auth-form input { width: 100%; border: 1px solid #cdd5e3; border-radius: 9px; padding: 12px; font: inherit; }
+    .auth-form input:focus-visible { outline: 3px solid #5665db40; border-color: #5665db; }
+    .auth-submit { border: 0; border-radius: 9px; background: #4f5ed5; color: white; padding: 12px; font-weight: 700; }
+    .auth-submit:disabled { opacity: .6; cursor: wait; }
+    .auth-switch { border: 0; background: transparent; color: #4f5ed5; padding: 4px; }
+    .auth-message { min-height: 1.5em; margin: 2px 0 0; font-size: 14px; color: #b42318; }
+    .auth-message.success { color: #027a48; }
     @media (max-width: 480px) { body { padding: 36px 16px; } .card { padding: 18px; } }
   </style>
 </head>
 <body>
   <main>
-    <h1>할 일 목록</h1>
+    <div class="topbar">
+      <h1>할 일 목록</h1>
+      <div class="account"><span id="account-email" class="account-email" hidden></span><button id="account-button" class="account-button" type="button">로그인</button></div>
+    </div>
     <time id="today" class="today"></time>
     <p class="intro">오늘 할 일을 적고 하나씩 완료해 보세요.</p>
     <section class="card" aria-label="할 일 추가">
@@ -50,14 +72,39 @@
     <p id="empty" class="empty">아직 할 일이 없어요. 첫 할 일을 추가해 보세요.</p>
     <ul id="task-list" aria-label="할 일 목록"></ul>
   </main>
+  <dialog id="auth-dialog" aria-labelledby="auth-title">
+    <div class="dialog-head"><h2 id="auth-title">로그인</h2><button id="auth-close" class="close" type="button" aria-label="닫기">&times;</button></div>
+    <form id="auth-form" class="auth-form">
+      <label>이메일<input id="auth-email" type="email" autocomplete="email" required></label>
+      <label>비밀번호<input id="auth-password" type="password" autocomplete="current-password" minlength="6" required></label>
+      <button id="auth-submit" class="auth-submit" type="submit">로그인</button>
+      <button id="auth-switch" class="auth-switch" type="button">계정이 없나요? 회원가입</button>
+      <p id="auth-message" class="auth-message" role="status" aria-live="polite"></p>
+    </form>
+  </dialog>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script>
-    const storageKey = 'todo-tasks-v1';
+    const guestStorageKey = 'todo-tasks-v1';
+    let storageKey = guestStorageKey;
     const form = document.querySelector('#task-form');
     const input = document.querySelector('#task-input');
     const list = document.querySelector('#task-list');
     const empty = document.querySelector('#empty');
     const count = document.querySelector('#count');
     const today = document.querySelector('#today');
+    const accountButton = document.querySelector('#account-button');
+    const accountEmail = document.querySelector('#account-email');
+    const authDialog = document.querySelector('#auth-dialog');
+    const authForm = document.querySelector('#auth-form');
+    const authTitle = document.querySelector('#auth-title');
+    const authEmail = document.querySelector('#auth-email');
+    const authPassword = document.querySelector('#auth-password');
+    const authSubmit = document.querySelector('#auth-submit');
+    const authSwitch = document.querySelector('#auth-switch');
+    const authMessage = document.querySelector('#auth-message');
+    let authClient = null;
+    let currentUser = null;
+    let authMode = 'login';
     let tasks = [];
 
     function updateToday() {
@@ -70,13 +117,100 @@
     updateToday();
     setInterval(updateToday, 60_000);
 
-    try {
-      const saved = JSON.parse(localStorage.getItem(storageKey) || '[]');
-      if (Array.isArray(saved)) {
-        tasks = saved.filter(task => task && typeof task.id === 'string' && typeof task.text === 'string')
-          .map(task => ({ id: task.id, text: task.text, done: task.done === true }));
+    function loadTasks() {
+      tasks = [];
+      try {
+        const saved = JSON.parse(localStorage.getItem(storageKey) || '[]');
+        if (Array.isArray(saved)) {
+          tasks = saved.filter(task => task && typeof task.id === 'string' && typeof task.text === 'string')
+            .map(task => ({ id: task.id, text: task.text, done: task.done === true }));
+        }
+      } catch (_) { /* 저장된 데이터가 손상되어도 앱은 계속 사용할 수 있습니다. */ }
+      render();
+    }
+
+    function showUser(user) {
+      currentUser = user;
+      accountEmail.textContent = user?.email || '';
+      accountEmail.hidden = !user;
+      accountButton.textContent = user ? '로그아웃' : '로그인';
+      const nextKey = user ? `todo-tasks-v1-user-${user.id}` : guestStorageKey;
+      if (nextKey !== storageKey) {
+        storageKey = nextKey;
+        loadTasks();
       }
-    } catch (_) { /* 저장된 데이터가 손상되어도 앱은 계속 사용할 수 있습니다. */ }
+      if (user && authDialog.open) authDialog.close();
+    }
+
+    function setAuthMode(mode) {
+      authMode = mode;
+      const signup = mode === 'signup';
+      authTitle.textContent = signup ? '회원가입' : '로그인';
+      authSubmit.textContent = signup ? '회원가입' : '로그인';
+      authSwitch.textContent = signup ? '이미 계정이 있나요? 로그인' : '계정이 없나요? 회원가입';
+      authPassword.autocomplete = signup ? 'new-password' : 'current-password';
+      authMessage.textContent = '';
+      authMessage.classList.remove('success');
+    }
+
+    accountButton.addEventListener('click', async () => {
+      if (currentUser) {
+        accountButton.disabled = true;
+        const { error } = await authClient.auth.signOut();
+        accountButton.disabled = false;
+        if (error) window.alert(`로그아웃 실패: ${error.message}`);
+        return;
+      }
+      setAuthMode('login');
+      authForm.reset();
+      authDialog.showModal();
+      authEmail.focus();
+    });
+    document.querySelector('#auth-close').addEventListener('click', () => authDialog.close());
+    authDialog.addEventListener('click', event => { if (event.target === authDialog) authDialog.close(); });
+    authSwitch.addEventListener('click', () => setAuthMode(authMode === 'login' ? 'signup' : 'login'));
+    authForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      authMessage.textContent = '';
+      if (!authClient) {
+        authMessage.textContent = '인증 설정을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.';
+        return;
+      }
+      authSubmit.disabled = true;
+      const credentials = { email: authEmail.value.trim(), password: authPassword.value };
+      try {
+        const { data, error } = authMode === 'signup'
+          ? await authClient.auth.signUp(credentials)
+          : await authClient.auth.signInWithPassword(credentials);
+        if (error) throw error;
+        if (authMode === 'signup' && !data.session) {
+          authMessage.textContent = '가입 확인 메일을 보냈습니다. 이메일을 확인해 주세요.';
+          authMessage.classList.add('success');
+        } else {
+          showUser(data.user);
+        }
+      } catch (error) {
+        authMessage.textContent = error.message || '인증 중 오류가 발생했습니다.';
+        authMessage.classList.remove('success');
+      } finally {
+        authSubmit.disabled = false;
+      }
+    });
+
+    async function initAuth() {
+      try {
+        const response = await fetch('/api/auth-config');
+        if (!response.ok) throw new Error('인증 설정을 불러오지 못했습니다.');
+        const { url, anonKey } = await response.json();
+        if (!url || !anonKey || !window.supabase) throw new Error('Supabase 연결 설정이 없습니다.');
+        authClient = window.supabase.createClient(url, anonKey);
+        authClient.auth.onAuthStateChange((_event, session) => showUser(session?.user || null));
+      } catch (error) {
+        console.error(error);
+        authMessage.textContent = '로그인 설정을 불러오지 못했습니다. Vercel 환경 변수를 확인해 주세요.';
+      }
+    }
+    initAuth();
 
     function save() {
       try { localStorage.setItem(storageKey, JSON.stringify(tasks)); } catch (_) {}
@@ -132,7 +266,7 @@
       input.focus();
     });
 
-    render();
+    loadTasks();
   </script>
 </body>
 </html>
